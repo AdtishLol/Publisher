@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Roblox Uploader</title>
+<style>
+:root{--bg:#070b1a;--card:#0f1530;--line:#222b55;--tx:#e6e9ff;--mut:#8b94c7;--ac:#4f7cff;--pu:#8b5cf6;--ok:#34d399;--er:#f87171}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(60% 40% at 80% 0,#1b1450 0,transparent 70%),var(--bg);color:var(--tx);font:15px system-ui,sans-serif;padding:16px}
+main{max-width:600px;margin:0 auto;display:grid;gap:14px}h1{font-size:22px;margin:8px 0 0}p{color:var(--mut);margin:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;display:grid;gap:10px}
+label{font-size:12px;color:var(--mut);display:grid;gap:4px}
+input,select,textarea{background:#0a0f26;color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;width:100%}
+textarea{min-height:80px;font:12px ui-monospace,monospace}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{border:0;border-radius:12px;padding:13px;font:600 15px system-ui;color:#fff;background:linear-gradient(135deg,var(--ac),var(--pu));cursor:pointer}
+button.g{background:#1a2250}button:disabled{opacity:.4;cursor:not-allowed}
+pre{margin:0;background:#050818;border:1px solid var(--line);border-radius:12px;padding:12px;min-height:80px;max-height:240px;overflow:auto;font:12px ui-monospace,monospace;white-space:pre-wrap;word-break:break-all}
+.ok{color:var(--ok)}.er{color:var(--er)}
+</style></head><body><main>
+<div><h1>Roblox Uploader</h1><p>Pick your game file (.rbxlx, .rbxl or .txt) and upload it to your place.</p></div>
+<section class="card">
+<label>Game file (.rbxlx, .rbxl or .txt containing the rbxlx text)<input id="file" type="file" accept=".rbxlx,.rbxl,.txt,.xml"></label>
+<label>...or paste the rbxlx text here<textarea id="paste" placeholder="<roblox ...>"></textarea></label>
+<label>Open Cloud API key (universe-places Write). Memory only.<input id="key" type="password" autocomplete="off"></label>
+<div class="row"><label>Universe ID<input id="uni" inputmode="numeric"></label><label>Place ID<input id="plc" inputmode="numeric"></label></div>
+<label>Version type<select id="vt"><option>Saved</option><option>Published</option></select></label>
+<button id="pub">Publish to Roblox</button>
+<button id="dl" class="g" disabled>Download converted .rbxlx</button>
+</section>
+<section class="card"><label>Console</label><pre id="log"></pre></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let prepared=null;
+const log=(m,c)=>{const l=$("log"),d=document.createElement("div");if(c)d.className=c;d.textContent=new Date().toLocaleTimeString()+"  "+m;l.appendChild(d);l.scrollTop=l.scrollHeight};
+
+// Turn whatever the user gave into a valid upload: {blob, ext, type, name}
+async function prepare(){
+  const f=$("file").files[0],pasted=$("paste").value;
+  if(!f&&!pasted.trim())throw new Error("Choose a file or paste the rbxlx text.");
+  let buf;
+  if(f){buf=new Uint8Array(await f.arrayBuffer());if(f.size>100*1048576)throw new Error("File is over 100 MB.")}
+  else buf=new TextEncoder().encode(pasted);
+  const head=new TextDecoder("latin1").decode(buf.slice(0,16));
+  if(head.startsWith("<roblox!"))return{blob:new Blob([buf]),ext:"rbxl",type:"application/octet-stream",name:(f?f.name.replace(/(_rename_to)?(\.(rbxlx?|txt|xml))+$/i,""):"game")+".rbxl",converted:false};
+  let text=new TextDecoder("utf-8").decode(buf).replace(/^\uFEFF/,"").trim();
+  const fence=text.match(/^```(?:xml|rbxlx)?\s*([\s\S]*?)\s*```$/);if(fence)text=fence[1].trim();   // strip markdown fences
+  const s=text.indexOf("<roblox");if(s<0)throw new Error("This doesn't look like a Roblox place. A .txt must contain the rbxlx XML starting with <roblox ...>.");
+  text=text.slice(s);
+  if(!text.endsWith("</roblox>")){const e=text.lastIndexOf("</roblox>");if(e<0)throw new Error("The text is cut off: no closing </roblox> found.");text=text.slice(0,e+9)}
+  if(!/<Item\s+class="/.test(text))throw new Error("The place has no objects in it.");
+  const converted=!!f&&!/\.rbxlx$/i.test(f.name)||!f;
+  return{blob:new Blob([text],{type:"application/xml"}),ext:"rbxlx",type:"application/xml",name:(f?f.name.replace(/(_rename_to)?(\.(rbxlx?|txt|xml))+$/i,""):"game")+".rbxlx",converted};
+}
+["file","paste"].forEach(i=>$(i).addEventListener("input",()=>{prepared=null;$("dl").disabled=true}));
+$("dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(prepared.blob);a.download=prepared.name;a.click()};
+
+$("pub").onclick=async()=>{
+  const u=$("uni").value.trim(),p=$("plc").value.trim(),k=$("key").value.trim(),vt=$("vt").value;
+  $("pub").disabled=true;
+  try{
+    if(!/^\d+$/.test(u)||!/^\d+$/.test(p))throw new Error("Universe ID and Place ID must be numbers.");
+    if(!k)throw new Error("Enter your API key.");
+    prepared=await prepare();$("dl").disabled=false;
+    log(`Ready: ${prepared.name} (${prepared.ext}, ${(prepared.blob.size/1048576).toFixed(2)} MB)${prepared.converted?", converted from text":""}.`);
+    if(!confirm(`Upload ${prepared.name} to universe ${u}, place ${p} as ${vt}?\nThis replaces the whole place.`))return log("Cancelled.");
+    log("Uploading...");
+    const url=`https://apis.roblox.com/universes/v1/${u}/places/${p}/versions?versionType=${vt}`;
+    let r;
+    try{r=await fetch(url,{method:"POST",headers:{"x-api-key":k,"Content-Type":prepared.type},body:prepared.blob})}
+    catch(e){
+      log("The browser couldn't reach Roblox. Roblox's API usually blocks direct browser calls (CORS), so nothing was published. Click \"Download converted .rbxlx\" and run this in a terminal from the same folder:","er");
+      log(`curl -X POST "${url}" -H "x-api-key: YOUR_KEY" -H "Content-Type: ${prepared.type}" --data-binary @"${prepared.name}"`);return}
+    const t=await r.text();
+    if(!r.ok){const h={401:"API key invalid or expired.",403:"Key lacks universe-places Write for this experience.",404:"Universe or place not found.",429:"Rate limited. Retry later."}[r.status]||"Roblox rejected the request.";throw new Error(`${h} (Roblox ${r.status}: ${t.slice(0,200)})`)}
+    let v;try{v=JSON.parse(t).versionNumber}catch{}
+    if(typeof v!=="number")throw new Error("Roblox replied 200 without a versionNumber, so success is unconfirmed: "+t.slice(0,200));
+    log(`Roblox confirmed: version ${v} (${vt}).`,"ok");
+  }catch(e){log(e.message,"er")}
+  finally{$("pub").disabled=false}
+};
+</script></body></html>
